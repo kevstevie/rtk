@@ -14,6 +14,7 @@ pub struct RtkRule {
 // Patterns ordered to match RULES indices exactly.
 pub const PATTERNS: &[&str] = &[
     r"^git\s+(?:-[Cc]\s+\S+\s+)*(status|log|diff|show|add|commit|push|pull|branch|fetch|stash|worktree)",
+    r"^(\./)?gradlew?\s+(build|test|clean|dependencies|tasks)",
     r"^gh\s+(pr|issue|run|repo|api|release)",
     r"^cargo\s+(build|test|clippy|check|fmt|install)",
     r"^pnpm\s+(list|ls|outdated|install)",
@@ -94,6 +95,19 @@ pub const RULES: &[RtkRule] = &[
             ("show", 80.0),
             ("add", 59.0),
             ("commit", 59.0),
+        ],
+        subcmd_status: &[],
+    },
+    RtkRule {
+        rtk_cmd: "rtk gradlew",
+        rewrite_prefixes: &["./gradlew", "gradlew", "gradle"],
+        category: "Build",
+        savings_pct: 75.0,
+        subcmd_savings: &[
+            ("build", 60.0),
+            ("test", 90.0),
+            ("dependencies", 70.0),
+            ("tasks", 70.0),
         ],
         subcmd_status: &[],
     },

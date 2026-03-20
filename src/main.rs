@@ -22,6 +22,7 @@ mod gh_cmd;
 mod git;
 mod go_cmd;
 mod golangci_cmd;
+mod gradlew_cmd;
 mod grep_cmd;
 mod gt_cmd;
 mod hook_audit_cmd;
@@ -190,6 +191,15 @@ enum Commands {
 
         #[command(subcommand)]
         command: GitCommands,
+    },
+
+    /// Gradle Wrapper commands with compact output
+    Gradlew {
+        /// Gradle subcommand (e.g., build, test, clean, dependencies, tasks)
+        subcommand: String,
+        /// Additional arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
     /// GitHub CLI (gh) commands with token-optimized output
@@ -1451,6 +1461,10 @@ fn main() -> Result<()> {
             }
         }
 
+        Commands::Gradlew { subcommand, args } => {
+            gradlew_cmd::run(subcommand, args, cli.verbose)?;
+        }
+
         Commands::Gh { subcommand, args } => {
             gh_cmd::run(&subcommand, &args, cli.verbose, cli.ultra_compact)?;
         }
@@ -2216,6 +2230,7 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Read { .. }
             | Commands::Smart { .. }
             | Commands::Git { .. }
+            | Commands::Gradlew { .. }
             | Commands::Gh { .. }
             | Commands::Pnpm { .. }
             | Commands::Err { .. }

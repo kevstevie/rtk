@@ -1,0 +1,99 @@
+> Task :compileJava UP-TO-DATE
+> Task :processResources NO-SOURCE
+> Task :classes UP-TO-DATE
+> Task :compileTestJava UP-TO-DATE
+> Task :processTestResources NO-SOURCE
+> Task :testClasses UP-TO-DATE
+> Task :test
+
+com.example.CalculatorTest > testAddition PASSED
+
+com.example.CalculatorTest > testSubtraction FAILED
+    java.lang.AssertionError: expected:<5> but was:<3>
+        at org.junit.Assert.fail(Assert.java:89)
+        at org.junit.Assert.failNotEquals(Assert.java:835)
+        at org.junit.Assert.assertEquals(Assert.java:647)
+        at com.example.CalculatorTest.testSubtraction(CalculatorTest.java:15)
+
+com.example.CalculatorTest > testMultiplication PASSED
+
+com.example.CalculatorTest > testDivision PASSED
+
+com.example.CalculatorTest > testModulo PASSED
+
+com.example.CalculatorTest > testPower PASSED
+
+com.example.CalculatorTest > testSquareRoot PASSED
+
+com.example.CalculatorTest > testAbsoluteValue PASSED
+
+com.example.CalculatorTest > testNegation PASSED
+
+com.example.CalculatorTest > testIncrement PASSED
+
+com.example.CalculatorTest > testDecrement PASSED
+
+com.example.ServiceTest > testCreate PASSED
+
+com.example.ServiceTest > testRead PASSED
+
+com.example.ServiceTest > testUpdate PASSED
+
+com.example.ServiceTest > testDelete PASSED
+
+com.example.ServiceTest > testFindAll PASSED
+
+com.example.ServiceTest > testFindById PASSED
+
+com.example.ServiceTest > testCount PASSED
+
+com.example.ServiceTest > testExists PASSED
+
+com.example.RepositoryTest > testSave PASSED
+
+com.example.RepositoryTest > testFlush PASSED
+
+com.example.RepositoryTest > testFindByName PASSED
+
+com.example.RepositoryTest > testFindByEmail PASSED
+
+com.example.StringUtilTest > testReverse FAILED
+    java.lang.NullPointerException: Cannot invoke "String.length()" because "str" is null
+        at com.example.StringUtil.reverse(StringUtil.java:10)
+        at com.example.StringUtilTest.testReverse(StringUtilTest.java:20)
+
+com.example.StringUtilTest > testUpperCase PASSED
+
+com.example.StringUtilTest > testLowerCase PASSED
+
+com.example.StringUtilTest > testTrim PASSED
+
+com.example.StringUtilTest > testSplit PASSED
+
+com.example.StringUtilTest > testJoin PASSED
+
+com.example.StringUtilTest > testContains PASSED
+
+com.example.StringUtilTest > testStartsWith PASSED
+
+com.example.StringUtilTest > testEndsWith PASSED
+
+33 tests completed, 2 failed
+
+> Task :test FAILED
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///Users/example/project/build/reports/tests/test/index.html
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+
+* Get more help at https://help.gradle.org
+
+BUILD FAILED in 2s
+4 actionable tasks: 1 executed, 3 up-to-date
