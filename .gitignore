@@ -46,3 +46,6 @@ claudedocs
 
 # icm 
 .fastembed_cache/
+
+.serena
+.claude

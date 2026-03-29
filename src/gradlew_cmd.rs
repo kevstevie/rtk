@@ -25,6 +25,9 @@ lazy_static! {
     // Test patterns — use `.+` for method names to match parameterized tests with () and []
     static ref TEST_PASSED: Regex = Regex::new(r"^([\w.]+) > (.+) PASSED$").unwrap();
     static ref TEST_FAILED: Regex = Regex::new(r"^([\w.]+) > (.+) FAILED$").unwrap();
+    // Summary line: "33 tests completed, 2 failed" or "33 tests completed"
+    static ref TESTS_SUMMARY: Regex =
+        Regex::new(r"(\d+) tests? completed(?:, (\d+) failed)?").unwrap();
 
     // Dependencies pattern
     static ref DEPENDENCY_DUPLICATE: Regex = Regex::new(r"\(\*\)").unwrap();
@@ -32,6 +35,9 @@ lazy_static! {
     // Tasks patterns
     static ref TASK_WITH_DESC: Regex = Regex::new(r"^(\w+)\s+-\s+(.+)$").unwrap();
     static ref TASK_HEADER: Regex = Regex::new(r"^([\w\s]+tasks|----+)$").unwrap();
+
+    // Multi-task splitting: capture task name from "> Task :taskname[...]" header
+    static ref TASK_HEADER_CAPTURE: Regex = Regex::new(r"^> Task :(\w+)").unwrap();
 }
 
 #[derive(Debug, PartialEq)]
@@ -52,13 +58,9 @@ fn detect_gradlew_cmd() -> &'static str {
 /// Main entry point for gradlew commands.
 pub fn run(subcommand: String, args: Vec<String>, verbose: u8) -> Result<()> {
     match subcommand.as_str() {
-        "build" => run_gradlew_filtered(&subcommand, &args, verbose, filter_gradlew_build),
-        "test" => run_gradlew_filtered(&subcommand, &args, verbose, filter_gradlew_test),
-        "clean" => run_gradlew_filtered(&subcommand, &args, verbose, filter_gradlew_clean),
-        "dependencies" => {
-            run_gradlew_filtered(&subcommand, &args, verbose, filter_gradlew_dependencies)
+        "build" | "test" | "clean" | "dependencies" | "tasks" => {
+            run_gradlew_filtered(&subcommand, &args, verbose, filter_gradlew_all)
         }
-        "tasks" => run_gradlew_filtered(&subcommand, &args, verbose, filter_gradlew_tasks),
         _ => run_passthrough(&subcommand, &args, verbose),
     }
 }
@@ -259,6 +261,9 @@ fn filter_gradlew_test(output: &str) -> String {
     let mut failure_count = 0;
     let mut pass_count = 0;
     let mut stack_trace_depth = 0;
+    // Total from summary line "X tests completed[, Y failed]" — authoritative count
+    let mut summary_total: Option<usize> = None;
+    let mut summary_failed: usize = 0;
     const MAX_STACK_DEPTH: usize = 5;
 
     for line in output.lines() {
@@ -281,12 +286,22 @@ fn filter_gradlew_test(output: &str) -> String {
             continue;
         }
 
+        // Parse the summary line to get authoritative totals even when Gradle
+        // doesn't print individual PASSED/FAILED lines (the default log level).
+        if let Some(caps) = TESTS_SUMMARY.captures(trimmed) {
+            if let Ok(total) = caps[1].parse::<usize>() {
+                summary_total = Some(total);
+            }
+            summary_failed = caps
+                .get(2)
+                .and_then(|m| m.as_str().parse().ok())
+                .unwrap_or(0);
+            continue;
+        }
+
         match state {
             TestParseState::Scanning => {
-                if trimmed.starts_with("BUILD SUCCESSFUL")
-                    || trimmed.starts_with("BUILD FAILED")
-                    || trimmed.contains("tests completed")
-                {
+                if trimmed.starts_with("BUILD FAILED") {
                     result.push(line.to_string());
                 }
             }
@@ -309,8 +324,18 @@ fn filter_gradlew_test(output: &str) -> String {
         result.push(failure_lines.join("\n"));
     }
 
-    if failure_count == 0 {
-        ok_confirmation("test", &format!("all {} tests passed", pass_count))
+    // Use summary line totals when available (more reliable than per-line counting).
+    let total_failed = if summary_total.is_some() {
+        summary_failed
+    } else {
+        failure_count
+    };
+    let total_passed = summary_total
+        .map(|t| t.saturating_sub(summary_failed))
+        .unwrap_or(pass_count);
+
+    if total_failed == 0 {
+        ok_confirmation("test", &format!("all {} tests passed", total_passed))
     } else {
         result.join("\n\n")
     }
@@ -399,6 +424,75 @@ fn filter_gradlew_tasks(output: &str) -> String {
     }
 }
 
+/// Return the filter function for a given gradle task name.
+fn get_task_filter(task_name: &str) -> fn(&str) -> String {
+    match task_name {
+        "test" => filter_gradlew_test,
+        "build" | "assemble" | "jar" | "bootJar" | "check" => filter_gradlew_build,
+        "clean" => filter_gradlew_clean,
+        "dependencies" => filter_gradlew_dependencies,
+        "tasks" => filter_gradlew_tasks,
+        _ => filter_generic_task,
+    }
+}
+
+/// For unknown or intermediate tasks (e.g. compileJava): show section only when it
+/// contains errors; otherwise return empty (silent success).
+fn filter_generic_task(output: &str) -> String {
+    let has_errors = output.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with("error:")
+            || t.contains(": error:")
+            || t.starts_with("ERROR")
+            || t.starts_with("Exception")
+    });
+    if has_errors {
+        output.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Split output into per-task sections and apply the appropriate filter to each.
+/// Handles multi-task invocations such as `./gradlew clean test`.
+///
+/// Gradle output uses `> Task :taskname[...]` header lines to delimit sections.
+/// Lines before the first task header are discarded (startup noise).
+/// When the same task name appears twice (e.g. `> Task :test` then `> Task :test FAILED`)
+/// all lines are accumulated into a single section for that task.
+fn filter_gradlew_all(output: &str) -> String {
+    let mut sections: Vec<(String, Vec<String>)> = Vec::new();
+    let mut current_idx: Option<usize> = None;
+
+    for line in output.lines() {
+        if let Some(caps) = TASK_HEADER_CAPTURE.captures(line) {
+            let task_name = caps[1].to_string();
+            // Merge into existing section for this task (handles "> Task :test FAILED" repetition)
+            if let Some(idx) = sections.iter().position(|(name, _)| name == &task_name) {
+                current_idx = Some(idx);
+            } else {
+                sections.push((task_name, Vec::new()));
+                current_idx = Some(sections.len() - 1);
+            }
+        } else if let Some(idx) = current_idx {
+            sections[idx].1.push(line.to_string());
+        }
+        // Lines before first task header are discarded (gradle startup noise)
+    }
+
+    let mut results: Vec<String> = Vec::new();
+    for (task_name, lines) in &sections {
+        let section_text = lines.join("\n");
+        let filter = get_task_filter(task_name);
+        let filtered = filter(&section_text);
+        if !filtered.trim().is_empty() {
+            results.push(filtered);
+        }
+    }
+
+    results.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,6 +561,38 @@ mod tests {
     }
 
     #[test]
+    fn test_gradlew_test_all_passed_summary_only() {
+        // Gradle default log level: no individual PASSED lines, only summary
+        let input =
+            "> Task :test\n\n100 tests completed\n\nBUILD SUCCESSFUL in 3s\n4 actionable tasks: 1 executed, 3 up-to-date";
+        let output = filter_gradlew_test(input);
+
+        assert!(
+            output.contains("ok test"),
+            "should confirm success: {}",
+            output
+        );
+        assert!(
+            output.contains("100 tests passed"),
+            "should show count: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_gradlew_test_summary_with_failures() {
+        let input = "> Task :test\n\n33 tests completed, 2 failed\n\n> Task :test FAILED\nBUILD FAILED in 2s";
+        let output = filter_gradlew_test(input);
+
+        // Should not show ok message when there are failures
+        assert!(
+            !output.contains("ok test"),
+            "should not confirm success: {}",
+            output
+        );
+    }
+
+    #[test]
     fn test_gradlew_clean_filter() {
         let input = "> Task :clean\nBUILD SUCCESSFUL in 1s\n1 actionable task: 1 executed";
         let output = filter_gradlew_clean(input);
@@ -507,6 +633,68 @@ mod tests {
         assert!(
             !output.contains("Assembles the outputs of this project")
                 || output.lines().count() < 30
+        );
+    }
+
+    #[test]
+    fn test_gradlew_all_clean_then_test_passed() {
+        let input = "> Task :clean\n> Task :test\n\ncom.example.Test > test1 PASSED\ncom.example.Test > test2 PASSED\n\n2 tests completed\n\nBUILD SUCCESSFUL in 2s";
+        let output = filter_gradlew_all(input);
+
+        assert!(
+            output.contains("ok clean"),
+            "should show clean confirmation: {}",
+            output
+        );
+        assert!(
+            output.contains("ok test"),
+            "should show test confirmation: {}",
+            output
+        );
+        assert!(
+            output.contains("2 tests passed"),
+            "should show test count: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_gradlew_all_clean_then_test_failed() {
+        let input = "> Task :clean\n> Task :test\n\ncom.example.Test > testFoo FAILED\n    java.lang.AssertionError at Test.java:10\n\n1 tests completed, 1 failed\n\n> Task :test FAILED\nBUILD FAILED in 2s";
+        let output = filter_gradlew_all(input);
+
+        assert!(
+            output.contains("ok clean"),
+            "should show clean confirmation: {}",
+            output
+        );
+        assert!(
+            output.contains("testFoo FAILED"),
+            "should show failed test: {}",
+            output
+        );
+        assert!(
+            !output.contains("ok test"),
+            "should not show test success: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_gradlew_all_single_task_unchanged() {
+        // Single-task: filter_gradlew_all must produce same result as the direct filter
+        let input = "> Task :test\n\n100 tests completed\n\nBUILD SUCCESSFUL in 3s";
+        let output = filter_gradlew_all(input);
+
+        assert!(
+            output.contains("ok test"),
+            "single-task should still work: {}",
+            output
+        );
+        assert!(
+            output.contains("100 tests passed"),
+            "should show count: {}",
+            output
         );
     }
 
